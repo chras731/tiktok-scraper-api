@@ -1,95 +1,110 @@
+import os
+import time
+import re
 import requests
 from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from supabase import create_client, Client
-import os
-from datetime import datetime
-import time
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
+# Set up Supabase
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def extract_video_data(url: str) -> dict:
+def get_pending_jobs():
+    response = supabase.table("video_metadata_jobs").select("id, video_url").execute()
+    return response.data
+
+
+def update_video_metadata(video_url, metadata):
+    supabase.table("videos").update(metadata).eq("url", video_url).execute()
+
+
+def scrape_video_metadata(video_url):
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"
-        }
-        res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        driver.get(video_url)
+        time.sleep(5)
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+
+        title = soup.title.string if soup.title else ""
+        description = ""
+        author = ""
+        audio_name = ""
+        audio_url = ""
+        comments = likes = saved = shared = play_count = repost_count = 0
+        creator_keywords = ""
+        tags_list = []
 
         scripts = soup.find_all("script")
-        data_script = next(
-            (script for script in scripts if "window.__INIT_PROPS__" in script.text),
-            None
-        )
+        for script in scripts:
+            if script.string and "playCount" in script.string:
+                json_text = script.string
 
-        if not data_script:
-            print(f"No data script found for {url}")
-            return {}
+                play_count_match = re.search(r'"playCount":(\d+)', json_text)
+                like_count_match = re.search(r'"diggCount":(\d+)', json_text)
+                comment_count_match = re.search(r'"commentCount":(\d+)', json_text)
+                share_count_match = re.search(r'"shareCount":(\d+)', json_text)
+                save_count_match = re.search(r'"collectCount":(\d+)', json_text)
+                repost_count_match = re.search(r'"repostCount":(\d+)', json_text)
+                audio_name_match = re.search(r'"music":\{"title":"(.*?)"', json_text)
+                audio_url_match = re.search(r'"playUrl":"(.*?)"', json_text)
+                author_match = re.search(r'"nickname":"(.*?)"', json_text)
+                desc_match = re.search(r'"desc":"(.*?)"', json_text)
+                tag_matches = re.findall(r'"hashtag_name":"(.*?)"', json_text)
+                creator_keywords_match = re.search(r'"uniqueId":"(.*?)"', json_text)
 
-        # Isolate JSON from script
-        text = data_script.text
-        json_start = text.find("{")
-        json_end = text.rfind("}") + 1
-        raw_json = text[json_start:json_end]
+                play_count = int(play_count_match.group(1)) if play_count_match else 0
+                likes = int(like_count_match.group(1)) if like_count_match else 0
+                comments = int(comment_count_match.group(1)) if comment_count_match else 0
+                shared = int(share_count_match.group(1)) if share_count_match else 0
+                saved = int(save_count_match.group(1)) if save_count_match else 0
+                repost_count = int(repost_count_match.group(1)) if repost_count_match else 0
+                audio_name = audio_name_match.group(1) if audio_name_match else ""
+                audio_url = audio_url_match.group(1).replace("\\u0026", "&") if audio_url_match else ""
+                author = author_match.group(1) if author_match else ""
+                description = desc_match.group(1) if desc_match else ""
+                tags_list = tag_matches
+                creator_keywords = creator_keywords_match.group(1) if creator_keywords_match else ""
 
-        import json
-        data = json.loads(raw_json)
-        video_data = next(iter(data.values()))
-
-        item_info = video_data.get("video", {}).get("itemInfos", {})
-        music_info = video_data.get("music", {})
-        author_info = video_data.get("author", {})
+                break
 
         return {
-            "url": url,
-            "title": item_info.get("text"),
-            "date": datetime.fromtimestamp(item_info.get("createTime", 0)).isoformat(),
-            "playCount": item_info.get("playCount"),
-            "commentCount": item_info.get("commentCount"),
-            "shareCount": item_info.get("shareCount"),
-            "likeCount": item_info.get("diggCount"),
-            "musicTitle": music_info.get("title"),
-            "musicAuthor": music_info.get("authorName"),
-            "musicId": music_info.get("musicId"),
-            "creator": author_info.get("uniqueId"),
+            "title": title,
+            "description": description,
+            "soundName": audio_name,
+            "soundUrl": audio_url,
+            "Comments": comments,
+            "likes": likes,
+            "saves": saved,
+            "shares": shared,
+            "plays": play_count,
+            "reposts": repost_count,
+            "creatorTags": creator_keywords,
+            "tags": tags_list
         }
 
-    except Exception as e:
-        print(f"Error scraping {url}: {e}")
-        return {}
+    finally:
+        driver.quit()
 
 
 def run_metadata_jobs():
-    jobs = supabase.table("video_metadata_jobs").select("*").eq("status", "pending").execute()
-    for job in jobs.data:
-        url = job["url"]
-        print(f"Processing: {url}")
-        data = extract_video_data(url)
-
-        if data:
-            # Match column names to Supabase schema
-            supabase.table("videos").insert({
-                "url": data["url"],
-                "title": data["title"],
-                "date": data["date"],
-                "play_count": data["playCount"],
-                "comment_count": data["commentCount"],
-                "share_count": data["shareCount"],
-                "like_count": data["likeCount"],
-                "music_title": data["musicTitle"],
-                "music_author": data["musicAuthor"],
-                "music_id": data["musicId"],
-                "creator_handle": data["creator"]
-            }).execute()
-
-        # Mark job as completed
-        supabase.table("video_metadata_jobs").update({
-            "status": "completed"
-        }).eq("id", job["id"]).execute()
-        time.sleep(2)  # avoid rate limits
+    jobs = get_pending_jobs()
+    for job in jobs:
+        video_url = job["video_url"]
+        metadata = scrape_video_metadata(video_url)
+        update_video_metadata(video_url, metadata)
 
 
 if __name__ == "__main__":
