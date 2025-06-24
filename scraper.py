@@ -25,6 +25,11 @@ def mock_scrape_creator(handle, until_date):
 
 def onboard_creator(handle):
     videos = mock_scrape_creator(handle, until_date="2024-01-01")
+    print("VIDEOS TO INSERT:", videos)  # Debugging aid
+
+    if not videos:
+        return {"status": "no videos found"}
+
     supabase = get_supabase_client()
     supabase.table("videos").insert(videos).execute()
     return {"status": "onboarded", "count": len(videos)}
@@ -33,6 +38,11 @@ def refresh_creator(handle=None):
     if handle:
         videos = mock_scrape_creator(handle, until_date=None)
         new_videos = deduplicate_videos(videos)
+        print("VIDEOS TO INSERT (REFRESH):", new_videos)  # Debugging aid
+
+        if not new_videos:
+            return {"status": "no new videos"}
+
         supabase = get_supabase_client()
         supabase.table("videos").insert(new_videos).execute()
         return {"status": "refreshed", "count": len(new_videos)}
