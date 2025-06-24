@@ -6,3 +6,4 @@ webdriver-manager
 python-dotenv
 tqdm
 lxml
+uvicorn
