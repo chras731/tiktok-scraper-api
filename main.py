@@ -1,4 +1,4 @@
-print("🟡 [MAIN.PY] Starting cron script...")
+print("🚨 This print is running — main.py is starting.")  # Top of file
 from pagedata import run_metadata_jobs
 
 if __name__ == "__main__":
