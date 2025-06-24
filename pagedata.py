@@ -17,7 +17,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def get_pending_jobs():
-    response = supabase.table("video_metadata_jobs").select("id, url").execute()
+    response = supabase.table("video_metadata_jobs").select("id, url").eq("status", "pending").execute()
     return response.data
 
 
@@ -25,16 +25,21 @@ def update_video_metadata(video_url, metadata):
     supabase.table("videos").update(metadata).eq("url", video_url).execute()
 
 
+def mark_job_complete(video_url):
+    supabase.table("video_metadata_jobs").update({"status": "complete"}).eq("url", video_url).execute()
+
+
 def scrape_video_metadata(video_url):
     options = Options()
-    options.add_argument("--headless=new")  # Modern headless mode for Chrome >=109
+    options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")  # Prevent crash from small /dev/shm
-    options.add_argument("--window-size=1920,1080")  # Optional but often improves stability
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
     try:
+        driver.set_page_load_timeout(15)
         driver.get(video_url)
         time.sleep(5)
 
@@ -103,10 +108,20 @@ def scrape_video_metadata(video_url):
 
 def run_metadata_jobs():
     jobs = get_pending_jobs()
+    print(f"📦 Found {len(jobs)} video metadata jobs")
+
     for job in jobs:
         video_url = job["url"]
+        print(f"🔍 Processing: {video_url}")
         metadata = scrape_video_metadata(video_url)
         update_video_metadata(video_url, metadata)
+        print(f"✅ Scraped metadata for: {video_url}")
+        
+        if metadata.get("plays") and metadata["plays"] > 0:
+            mark_job_complete(video_url)
+            print(f"🏁 Marked job as complete for: {video_url}")
+        else:
+            print(f"⚠️ Skipped marking complete (missing play count) for: {video_url}")
 
 
 if __name__ == "__main__":
