@@ -9,6 +9,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from supabase_client import get_supabase_client
 
+
 def extract_timestamp_from_id(video_id: str):
     try:
         binary = bin(int(video_id))[2:].zfill(64)
@@ -20,20 +21,41 @@ def extract_timestamp_from_id(video_id: str):
 def parse_hashtags(text):
     return " ".join(re.findall(r"#\w+", text))
 
+def scroll_to_load(driver, max_scrolls=10):
+    last_height = driver.execute_script("return document.body.scrollHeight")
+    for _ in range(max_scrolls):
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(3)
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        if new_height == last_height:
+            break
+        last_height = new_height
+
 def scrape_creator_videos(handle, until_date="2024-01-01"):
     print(f"Scraping TikTok profile for: {handle}")
     base_url = f"https://www.tiktok.com/@{handle}"
     videos = []
 
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
+    # Do not run headless to allow login
+    # chrome_options.add_argument("--headless")
+
     driver = webdriver.Chrome(options=chrome_options)
 
     try:
         driver.get(base_url)
         time.sleep(5)
+
+        # Wait for potential login if required
+        if "login" in driver.current_url:
+            print("Please log in to TikTok manually in the browser...")
+            while "login" in driver.current_url:
+                time.sleep(3)
+
+        scroll_to_load(driver, max_scrolls=10)
 
         posts = driver.find_elements(By.CSS_SELECTOR, "div[data-e2e='user-post-item']")
         for post in posts:
@@ -45,8 +67,8 @@ def scrape_creator_videos(handle, until_date="2024-01-01"):
 
                 video_id = re.search(r"/video/(\d+)", href).group(1)
                 video_date = extract_timestamp_from_id(video_id)
-                if not video_date or video_date < until_date:
-                    break
+                if not video_date or (until_date and video_date < until_date):
+                    continue
 
                 desc = post.text
                 tags = parse_hashtags(desc)
@@ -80,7 +102,6 @@ def onboard_creator(handle):
     supabase = get_supabase_client()
     creator_id = str(uuid.uuid4())
 
-    # Insert creator
     supabase.table("creators").insert({
         "id": creator_id,
         "handle": handle,
@@ -88,12 +109,10 @@ def onboard_creator(handle):
         "last_checked": datetime.utcnow().isoformat()
     }).execute()
 
-    # Scrape videos
     videos = scrape_creator_videos(handle)
     for v in videos:
         v["creator_id"] = creator_id
 
-    # Insert videos
     if videos:
         supabase.table("videos").insert(videos).execute()
 
