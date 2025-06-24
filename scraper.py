@@ -10,26 +10,22 @@ def mock_scrape_creator(handle, until_date):
             "title": "Example Video",
             "description": "Test description",
             "creator": handle,
-            "soundName": "Cool Song",
-            "soundUrl": "https://tiktok.com/music",
-            "Comments": 10,
+            "sound_name": "Cool Song",
+            "sound_url": "https://tiktok.com/music",
+            "comments": 10,
             "likes": 100,
             "saves": 5,
             "shares": 2,
             "plays": 1000,
             "reposts": 0,
-            "creatorTags": "",
+            "creator_tags": "",
             "tags": "#example"
         }
     ]
 
 def onboard_creator(handle):
     videos = mock_scrape_creator(handle, until_date="2024-01-01")
-    print("VIDEOS TO INSERT:", videos)  # Debugging aid
-
-    if not videos:
-        return {"status": "no videos found"}
-
+    print("VIDEOS TO INSERT:", videos)
     supabase = get_supabase_client()
     supabase.table("videos").insert(videos).execute()
     return {"status": "onboarded", "count": len(videos)}
@@ -38,11 +34,6 @@ def refresh_creator(handle=None):
     if handle:
         videos = mock_scrape_creator(handle, until_date=None)
         new_videos = deduplicate_videos(videos)
-        print("VIDEOS TO INSERT (REFRESH):", new_videos)  # Debugging aid
-
-        if not new_videos:
-            return {"status": "no new videos"}
-
         supabase = get_supabase_client()
         supabase.table("videos").insert(new_videos).execute()
         return {"status": "refreshed", "count": len(new_videos)}
