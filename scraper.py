@@ -1,5 +1,5 @@
 from utils import extract_timestamp, deduplicate_videos
-from supabase_client import insert_videos
+from supabase_client import get_supabase_client
 
 def mock_scrape_creator(handle, until_date):
     # TODO: Replace with real scraping logic
