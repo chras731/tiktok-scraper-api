@@ -1,10 +1,6 @@
-supabase
-pandas
-beautifulsoup4
-selenium
-webdriver-manager
-python-dotenv
-tqdm
-lxml
+fastapi
 uvicorn
-undetected-chromedriver
+requests
+beautifulsoup4
+python-dotenv
+supabase
