@@ -1,146 +1,94 @@
-import pandas as pd
+import time
+from supabase import create_client, Client
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from bs4 import BeautifulSoup
-import time
-import json
-import os
 from webdriver_manager.chrome import ChromeDriverManager
 from tqdm import tqdm
+from datetime import datetime
+import uuid
+import os
 
-# Set up Selenium WebDriver
-chrome_options = Options()
-chrome_options.add_argument("--headless")  # Run in headless mode
-chrome_options.add_argument("--disable-gpu")
-chrome_options.add_argument("--no-sandbox")
+# Supabase setup
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Update with your ChromeDriver path
-service = Service(ChromeDriverManager().install())
-driver = webdriver.Chrome(service=service, options=chrome_options)
+def scrape_video_metadata(url):
+    """Extracts metadata from a TikTok video URL using Selenium."""
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
 
-# Function that returns URL data
-def scrape_tiktok_text(url):
     driver.get(url)
-    time.sleep(5)  # Wait for page to load
+    time.sleep(5)
 
-    soup = BeautifulSoup(driver.page_source, "lxml")
+    try:
+        description = driver.find_element(By.XPATH, '//h1').text
+    except:
+        description = None
 
-    finder = json.loads(soup.find("script", id="__UNIVERSAL_DATA_FOR_REHYDRATION__").string)
-    content = finder['__DEFAULT_SCOPE__']['webapp.video-detail']['itemInfo']['itemStruct']
+    try:
+        sound = driver.find_element(By.XPATH, '//span[contains(text(),"original sound") or contains(text(),"🎵")]').text
+    except:
+        sound = None
 
-    title = soup.find("meta", property="og:title")
-    title_text = title['content'] if title else "No title found"
-    description = content['desc'] if 'desc' in content else ""
-    
-    author = ""
-    if 'author' in content:
-        author = content['author']['uniqueId'] if 'uniqueId' in content['author'] else ""
-    
-    audio_name = ""
-    audio_url = ""
-    if 'music' in content:
-        audio_name = content['music']['title'] if 'title' in content['music'] else ""
-        audio_url = content['music']['playUrl'] if 'playUrl' in content['music'] else ""
+    try:
+        stats_elements = driver.find_elements(By.XPATH, '//strong')
+        likes = int(stats_elements[0].text.replace(',', '')) if len(stats_elements) > 0 else None
+        comments = int(stats_elements[1].text.replace(',', '')) if len(stats_elements) > 1 else None
+        shares = int(stats_elements[2].text.replace(',', '')) if len(stats_elements) > 2 else None
+    except:
+        likes, comments, shares = None, None, None
 
-    comments = ""
-    likes = ""
-    saved = "" 
-    shared = ""
-    playCount = ""
-    repostCount = ""
-    if 'statsV2' in content:
-        comments = content['statsV2']['commentCount'] if 'desc' in content else ""
-        likes = content['statsV2']['diggCount'] if 'desc' in content else ""
-        saved = content['statsV2']['collectCount'] if 'desc' in content else ""
-        shared = content['statsV2']['shareCount'] if 'desc' in content else ""
-        playCount = content['statsV2']['playCount'] if 'desc' in content else ""
-        repostCount = content['statsV2']['repostCount'] if 'desc' in content else ""
-
-    tags = soup.find("meta", attrs={'name': 'keywords'})
-    tags_list = tags['content'] if tags else "No description found"
-    tags_list = [i.strip() for i in tags_list.split(",")]
-
-    
-
-    creatorKeywords = [i['keyword'].replace("-", " ") for i in content['keywordTags']] if 'keywordTags' in content else []
-
+    driver.quit()
     return {
-        "url": url,
-        "title": title_text,
         "description": description,
-        "creator": author,
-        "soundName": audio_name,
-        "soundUrl": audio_url,
-        "Comments": comments,
+        "sound": sound,
         "likes": likes,
-        "saves": saved,
-        "shares": shared,
-        "plays": playCount,
-        "reposts": repostCount,
-        "creatorTags": creatorKeywords,
-        "tags": tags_list
+        "comments": comments,
+        "shares": shares
     }
 
-def process_and_save_csv(input_csv, output_csv):
-    # Read input CSV
-    df = pd.read_csv(input_csv)
+def run_metadata_jobs():
+    # Fetch up to 10 pending jobs
+    response = supabase.table("video_metadata_jobs").select("*").eq("status", "pending").limit(10).execute()
+    jobs = response.data
 
-    # Ensure input CSV has required columns
-    if 'url' not in df.columns or 'keyword' not in df.columns or 'date' not in df.columns:
-        print("CSV must contain 'url', 'keyword', and 'date' columns.")
+    if not jobs:
+        print("No pending metadata jobs found.")
         return
 
-    all_data = []  # List to store processed rows
+    for job in tqdm(jobs, desc="Processing Metadata Jobs"):
+        video_url = job["video_url"]
+        video_id = job["video_id"]
+        job_id = job["id"]
 
-    # Iterate over each row in input CSV
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="Processing URLs", unit="row"):
-        url = row['url']
-        searchterm = row['keyword']
-        date = row['date']
+        try:
+            # Update job to in_progress
+            supabase.table("video_metadata_jobs").update({
+                "status": "in_progress",
+                "started_at": datetime.utcnow().isoformat()
+            }).eq("id", job_id).execute()
 
-        # Fetch additional data for the URL
-        additional_data = scrape_tiktok_text(url)
+            metadata = scrape_video_metadata(video_url)
 
-        # Format data in the required JSON structure
-        new_row = {
-            "url": url,
-            "date": date,
-            "searchterm": searchterm,
-            "title": additional_data.get("title", ""),
-            "description": additional_data.get("description", ""),
-            "creator": additional_data.get("creator", ""),
-            "soundName": additional_data.get("soundName", ""),
-            "soundUrl": additional_data.get("soundUrl", ""),
-            "Comments": additional_data.get("Comments", 0),
-            "likes": additional_data.get("likes", 0),
-            "saves": additional_data.get("saves", 0),
-            "shares": additional_data.get("shares", 0),
-            "plays": additional_data.get("plays", 0),
-            "reposts": additional_data.get("reposts", 0),
-            "creatorTags": additional_data.get("creatorTags", ""),
-            "tags": additional_data.get("tags", ""),
-        }
+            # Update videos table with new metadata
+            supabase.table("videos").update(metadata).eq("id", video_id).execute()
 
-        # Append formatted row
-        all_data.append(new_row)
+            # Mark job complete
+            supabase.table("video_metadata_jobs").update({
+                "status": "complete",
+                "completed_at": datetime.utcnow().isoformat()
+            }).eq("id", job_id).execute()
 
-    # Convert collected data into a DataFrame
-    new_df = pd.DataFrame(all_data)
+        except Exception as e:
+            print(f"Failed job {job_id}: {e}")
+            supabase.table("video_metadata_jobs").update({
+                "status": "failed"
+            }).eq("id", job_id).execute()
 
-    # If output CSV exists, append data while maintaining column structure
-    if os.path.exists(output_csv):
-        existing_df = pd.read_csv(output_csv)
-        new_df = pd.concat([existing_df, new_df], ignore_index=True).fillna('')
-
-    # Save the updated DataFrame to CSV
-    new_df.to_csv(output_csv, index=False)
-
-    print(f"Processed data saved to {output_csv}")
-
-input_csv_path = 'tiktok_video_data.csv'
-output_csv_path = 'tiktok_video_data_final.csv'  # The structured output CSV
-process_and_save_csv(input_csv_path, output_csv_path)
-
-driver.quit()
+if __name__ == "__main__":
+    run_metadata_jobs()
