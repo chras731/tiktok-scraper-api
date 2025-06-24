@@ -1,7 +1,5 @@
 fastapi
 uvicorn
-supabase
 selenium
-beautifulsoup4
-pandas
-python-dotenv
+supabase
+httpx
