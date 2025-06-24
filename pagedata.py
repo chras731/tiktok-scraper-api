@@ -1,109 +1,70 @@
 import json
-import time
 import re
-from supabase import create_client, Client
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from bs4 import BeautifulSoup
-from tqdm import tqdm
-from urllib.parse import urlparse
+import time
 import os
+import requests
+from bs4 import BeautifulSoup
+from supabase import create_client, Client
+from tqdm import tqdm
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+}
+
 def extract_video_id(url):
-    match = re.search(r'/video/(\d+)', url)
+    match = re.search(r"/video/(\d+)", url)
     return match.group(1) if match else None
 
-def get_driver():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.page_load_strategy = "eager"
-    return webdriver.Chrome(options=chrome_options)
-
-def scrape_metadata(driver, video_url):
+def scrape_metadata(video_url):
     try:
-        driver.get(video_url)
-        time.sleep(5)
+        res = requests.get(video_url, headers=headers, timeout=10)
+        if res.status_code != 200:
+            raise Exception(f"Failed to load page: {res.status_code}")
 
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-
+        soup = BeautifulSoup(res.text, "html.parser")
         script_tag = soup.find("script", id="SIGI_STATE")
         if not script_tag:
             raise Exception("SIGI_STATE script tag not found")
 
         data = json.loads(script_tag.string)
-
         video_data = list(data["ItemModule"].values())[0]
         author_data = list(data["UserModule"]["users"].values())[0]
 
         return {
             "title": video_data.get("desc", ""),
             "description": video_data.get("desc", ""),
-            "soundName": video_data.get("music", {}).get("title", ""),
-            "soundUrl": video_data.get("music", {}).get("playUrl", ""),
-            "comments": video_data.get("stats", {}).get("commentCount", 0),
-            "likes": video_data.get("stats", {}).get("diggCount", 0),
-            "saves": video_data.get("stats", {}).get("collectCount", 0),
-            "shares": video_data.get("stats", {}).get("shareCount", 0),
+            "createTime": video_data.get("createTime", None),
+            "video_id": video_data.get("id", None),
+            "author": author_data.get("uniqueId", ""),
+            "music": video_data.get("music", {}).get("title", ""),
             "plays": video_data.get("stats", {}).get("playCount", 0),
-            "reposts": video_data.get("stats", {}).get("forwardCount", 0),
-            "creatorTags": author_data.get("bioUrls", []),
-            "tags": video_data.get("textExtra", []),
+            "likes": video_data.get("stats", {}).get("diggCount", 0),
+            "comments": video_data.get("stats", {}).get("commentCount", 0),
+            "shares": video_data.get("stats", {}).get("shareCount", 0),
+            "video_url": video_url
         }
-
     except Exception as e:
-        print(f"Scrape error: {e}")
+        print(f"Scrape error for {video_url}: {e}")
         return None
 
-def run_metadata_jobs():
-    print("🔍 Fetching pending jobs...\n")
-    jobs_response = supabase.table("video_metadata_jobs").select("*").eq("status", "pending").execute()
-    jobs = jobs_response.data or []
+def process_pending_jobs():
+    print("\n🔍 Fetching pending jobs from Supabase...")
+    jobs = supabase.table("videos").select("id, video_url").is_("title", None).limit(20).execute()
+    pending = jobs.data or []
 
-    print(f"📦 Found {len(jobs)} pending jobs.\n")
+    print(f"\n📦 Found {len(pending)} pending jobs.\n")
+    
+    for job in tqdm(pending, desc="Processing Metadata Jobs"):
+        metadata = scrape_metadata(job["video_url"])
+        if metadata:
+            supabase.table("videos").update(metadata).eq("id", job["id"]).execute()
 
-    driver = get_driver()
-
-    for job in tqdm(jobs, desc="Processing Metadata Jobs"):
-        video_url = job["video_url"]
-        video_id = extract_video_id(video_url)
-
-        if not video_id:
-            print(f"❌ Invalid video URL: {video_url}")
-            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
-            continue
-
-        metadata = scrape_metadata(driver, video_url)
-
-        if not metadata:
-            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
-            continue
-
-        video_record = supabase.table("videos").select("id").eq("id", video_id).execute()
-
-        if not video_record.data:
-            print(f"⚠️ No matching video in videos table for ID {video_id}")
-            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
-            continue
-
-        print(f"✅ Updating video ID {video_id} with:\n{json.dumps(metadata, indent=2)}\n")
-
-        try:
-            supabase.table("videos").update(metadata).eq("id", video_id).execute()
-            supabase.table("video_metadata_jobs").update({"status": "completed"}).eq("id", job["id"]).execute()
-        except Exception as e:
-            print(f"🔥 Failed to update video {video_id}: {e}")
-            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
-
-    driver.quit()
-    print("✅ All jobs processed.\n")
+    print("\n✅ All jobs processed.\n")
 
 if __name__ == "__main__":
-    run_metadata_jobs()
+    process_pending_jobs()
