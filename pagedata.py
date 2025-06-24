@@ -1,96 +1,109 @@
 import json
 import time
+import re
 from supabase import create_client, Client
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
 from tqdm import tqdm
-import re
-
+from urllib.parse import urlparse
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def extract_video_data_from_html(html):
-    # Extract the SIGI_STATE JSON object using regex
-    match = re.search(r'<script id="SIGI_STATE"[^>]*>(.*?)</script>', html)
-    if not match:
-        raise ValueError("SIGI_STATE script tag not found")
+def extract_video_id(url):
+    match = re.search(r'/video/(\d+)', url)
+    return match.group(1) if match else None
 
-    json_text = match.group(1)
-    data = json.loads(json_text)
+def get_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.page_load_strategy = "eager"
+    return webdriver.Chrome(options=chrome_options)
 
+def scrape_metadata(driver, video_url):
     try:
-        item_module = data["ItemModule"]
-        for video_id, video_data in item_module.items():
-            return {
-                "video_id": video_id,
-                "title": video_data.get("title"),
-                "description": video_data.get("desc"),
-                "soundName": video_data.get("music", {}).get("title"),
-                "soundUrl": video_data.get("music", {}).get("playUrl"),
-                "comments": video_data.get("stats", {}).get("commentCount"),
-                "likes": video_data.get("stats", {}).get("diggCount"),
-                "saves": video_data.get("stats", {}).get("collectCount"),
-                "shares": video_data.get("stats", {}).get("shareCount"),
-                "plays": video_data.get("stats", {}).get("playCount"),
-                "reposts": video_data.get("stats", {}).get("forwardCount"),
-                "creatorTags": video_data.get("author", {}).get("uniqueId"),
-                "tags": [tag.get("tag") for tag in video_data.get("textExtra", []) if "tag" in tag],
-            }
+        driver.get(video_url)
+        time.sleep(5)
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+
+        script_tag = soup.find("script", id="SIGI_STATE")
+        if not script_tag:
+            raise Exception("SIGI_STATE script tag not found")
+
+        data = json.loads(script_tag.string)
+
+        video_data = list(data["ItemModule"].values())[0]
+        author_data = list(data["UserModule"]["users"].values())[0]
+
+        return {
+            "title": video_data.get("desc", ""),
+            "description": video_data.get("desc", ""),
+            "soundName": video_data.get("music", {}).get("title", ""),
+            "soundUrl": video_data.get("music", {}).get("playUrl", ""),
+            "comments": video_data.get("stats", {}).get("commentCount", 0),
+            "likes": video_data.get("stats", {}).get("diggCount", 0),
+            "saves": video_data.get("stats", {}).get("collectCount", 0),
+            "shares": video_data.get("stats", {}).get("shareCount", 0),
+            "plays": video_data.get("stats", {}).get("playCount", 0),
+            "reposts": video_data.get("stats", {}).get("forwardCount", 0),
+            "creatorTags": author_data.get("bioUrls", []),
+            "tags": video_data.get("textExtra", []),
+        }
+
     except Exception as e:
-        raise ValueError("Failed to parse video data: " + str(e))
+        print(f"Scrape error: {e}")
+        return None
 
 def run_metadata_jobs():
     print("🔍 Fetching pending jobs...\n")
-    jobs = supabase.table("video_metadata_jobs").select("*").eq("status", "pending").execute().data
+    jobs_response = supabase.table("video_metadata_jobs").select("*").eq("status", "pending").execute()
+    jobs = jobs_response.data or []
+
     print(f"📦 Found {len(jobs)} pending jobs.\n")
 
-    if not jobs:
-        return
-
-    options = Options()
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    # Uncomment this for debugging locally
-    # options.add_argument("--headless=new")
-
-    driver = webdriver.Chrome(options=options)
+    driver = get_driver()
 
     for job in tqdm(jobs, desc="Processing Metadata Jobs"):
-        job_id = job["id"]
         video_url = job["video_url"]
+        video_id = extract_video_id(video_url)
+
+        if not video_id:
+            print(f"❌ Invalid video URL: {video_url}")
+            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
+            continue
+
+        metadata = scrape_metadata(driver, video_url)
+
+        if not metadata:
+            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
+            continue
+
+        video_record = supabase.table("videos").select("id").eq("id", video_id).execute()
+
+        if not video_record.data:
+            print(f"⚠️ No matching video in videos table for ID {video_id}")
+            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
+            continue
+
+        print(f"✅ Updating video ID {video_id} with:\n{json.dumps(metadata, indent=2)}\n")
 
         try:
-            driver.get(video_url)
-
-            # Wait until the SIGI_STATE script is present
-            WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.XPATH, '//script[@id="SIGI_STATE"]'))
-            )
-            time.sleep(1)  # Add buffer in case script is still loading
-
-            html = driver.page_source
-            video_data = extract_video_data_from_html(html)
-
-            update_payload = {k: v for k, v in video_data.items() if v is not None}
-            supabase.table("videos").update(update_payload).eq("id", job_id).execute()
-            supabase.table("video_metadata_jobs").update({"status": "completed"}).eq("id", job_id).execute()
-
+            supabase.table("videos").update(metadata).eq("id", video_id).execute()
+            supabase.table("video_metadata_jobs").update({"status": "completed"}).eq("id", job["id"]).execute()
         except Exception as e:
-            print(f"\nError processing {video_url}: {e}\n")
-            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", job_id).execute()
+            print(f"🔥 Failed to update video {video_id}: {e}")
+            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", job["id"]).execute()
 
     driver.quit()
-    print("\n✅ All jobs processed.\n")
+    print("✅ All jobs processed.\n")
+
+if __name__ == "__main__":
+    run_metadata_jobs()
