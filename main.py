@@ -1,7 +1,9 @@
-# main.py
 from pagedata import run_metadata_jobs
 
 if __name__ == "__main__":
-    print("🚀 Starting metadata job runner...")
-    run_metadata_jobs()
-    print("✅ Finished all jobs.")
+    print("🚀 Cron job started.")
+    try:
+        run_metadata_jobs()
+    except Exception as e:
+        print(f"❌ Error during metadata job: {e}")
+    print("✅ Cron job finished.")
