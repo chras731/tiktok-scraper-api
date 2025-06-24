@@ -1,40 +1,25 @@
+# Dockerfile
 FROM python:3.12-slim
 
-# Install system dependencies for Playwright Chromium
-RUN apt-get update && apt-get install -y \
-    curl \
-    wget \
-    gnupg \
-    unzip \
-    libnss3 \
-    libatk-bridge2.0-0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libgtk-3-0 \
-    libasound2 \
-    libxshmfence1 \
-    libxss1 \
-    libx11-xcb1 \
-    fonts-liberation \
-    libappindicator3-1 \
-    xdg-utils \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# Install dependencies
+RUN apt-get update && \
+    apt-get install -y wget unzip gnupg2 curl && \
+    apt-get install -y chromium chromium-driver && \
+    pip install --upgrade pip
 
-# Set working directory
+# Set env variables for headless Chrome
+ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
+
+# Install Python deps
 WORKDIR /app
-
-# Install Python packages
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# Install Playwright and Chromium
-RUN pip install playwright && playwright install --with-deps
-
-# Copy all project files
+# Copy app
 COPY . .
 
-# Start the server
+# Expose port
+EXPOSE 8000
+
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
