@@ -8,19 +8,23 @@ from supabase_client import supabase
 from datetime import datetime
 
 def load_cookies(driver, path='cookies.json'):
-    with open(path, 'r') as f:
-        cookies = json.load(f)
-    for cookie in cookies:
-        if 'sameSite' in cookie:
-            if cookie['sameSite'] == 'None':
+    try:
+        with open(path, 'r') as f:
+            cookies = json.load(f)
+        for cookie in cookies:
+            if 'sameSite' in cookie and cookie['sameSite'] == 'None':
                 cookie['sameSite'] = 'Strict'
-        driver.add_cookie(cookie)
+            driver.add_cookie(cookie)
+        print("Cookies loaded successfully.")
+    except Exception as e:
+        print(f"Error loading cookies: {e}")
+        raise
 
 def scrape_creator_videos(handle):
     print(f"Scraping TikTok profile for: {handle}")
 
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -44,9 +48,9 @@ def scrape_creator_videos(handle):
     time.sleep(5)
 
     SCROLL_PAUSE_TIME = 2
+    scroll_attempts = 0
     last_height = driver.execute_script("return document.body.scrollHeight")
 
-    scroll_attempts = 0
     while scroll_attempts < 10:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE_TIME)
@@ -64,16 +68,19 @@ def scrape_creator_videos(handle):
 
     videos = []
     for url in video_urls:
-        video_id = url.split('/video/')[1].split('?')[0]
-        timestamp = int(video_id) >> 32
-        date_posted = datetime.utcfromtimestamp(timestamp).isoformat()
+        try:
+            video_id = url.split('/video/')[1].split('?')[0]
+            timestamp = int(video_id) >> 32
+            date_posted = datetime.utcfromtimestamp(timestamp).isoformat()
 
-        videos.append({
-            "creator_handle": handle,
-            "url": url,
-            "video_id": video_id,
-            "date": date_posted
-        })
+            videos.append({
+                "creator_handle": handle,
+                "url": url,
+                "video_id": video_id,
+                "date": date_posted
+            })
+        except Exception as e:
+            print(f"Error parsing video URL {url}: {e}")
 
     driver.quit()
     return videos
