@@ -90,3 +90,12 @@ def onboard_creator(handle):
     if videos:
         supabase.table("videos").insert(videos).execute()
     return {"status": "onboarded", "count": len(videos)}
+
+def refresh_creator(handle):
+    existing_ids = supabase.table("videos").select("video_id").eq("creator_handle", handle).execute()
+    existing_ids = {row["video_id"] for row in existing_ids.data}
+    videos = scrape_creator_videos(handle)
+    new_videos = [v for v in videos if v["video_id"] not in existing_ids]
+    if new_videos:
+        supabase.table("videos").insert(new_videos).execute()
+    return {"status": "refreshed", "new_count": len(new_videos)}
