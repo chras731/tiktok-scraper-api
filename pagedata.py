@@ -1,119 +1,100 @@
+
 import os
 import time
-import json
-from bs4 import BeautifulSoup
+from tqdm import tqdm
+from supabase import create_client, Client
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
-from supabase import create_client, Client
-from tqdm import tqdm
-from dotenv import load_dotenv
+from selenium.common.exceptions import TimeoutException, WebDriverException
+import json
 
-# Load Supabase credentials from environment
-load_dotenv()
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Set up Selenium
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--disable-gpu")
-chrome_options.add_argument("--no-sandbox")
-driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+def setup_driver():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--window-size=1920x1080")
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    return driver
 
 def scrape_tiktok_text(url):
     try:
+        driver = setup_driver()
         driver.get(url)
-        time.sleep(5)
-        soup = BeautifulSoup(driver.page_source, "lxml")
+        time.sleep(5)  # Let JS render
+        data = {}
 
-        finder = json.loads(soup.find("script", id="__UNIVERSAL_DATA_FOR_REHYDRATION__").string)
-        content = finder['__DEFAULT_SCOPE__']['webapp.video-detail']['itemInfo']['itemStruct']
+        # Title and description
+        try:
+            description_elem = driver.find_element(By.XPATH, '//h1[contains(@data-e2e,"video-desc")]')
+            data['description'] = description_elem.text
+        except:
+            data['description'] = None
 
-        title = soup.find("meta", property="og:title")
-        title_text = title['content'] if title else "No title found"
-        description = content.get('desc', "")
+        try:
+            title_elem = driver.find_element(By.XPATH, '//title')
+            data['title'] = title_elem.get_attribute("innerText")
+        except:
+            data['title'] = None
 
-        audio = content.get('music', {})
-        audio_name = audio.get('title', "")
-        audio_url = audio.get('playUrl', "")
+        # Sound name
+        try:
+            sound_elem = driver.find_element(By.XPATH, '//a[contains(@data-e2e,"browse-sound")]')
+            data['soundName'] = sound_elem.text
+            data['soundUrl'] = sound_elem.get_attribute('href')
+        except:
+            data['soundName'] = None
+            data['soundUrl'] = None
 
-        author = content.get('author', {}).get('uniqueId', "")
+        # Stats
+        try:
+            stats = driver.find_elements(By.XPATH, '//strong[contains(@data-e2e,"like-count") or contains(@data-e2e,"comment-count") or contains(@data-e2e,"share-count")]')
+            if len(stats) >= 3:
+                data['likes'] = int(stats[0].text.replace(',', ''))
+                data['comments'] = int(stats[1].text.replace(',', ''))
+                data['shares'] = int(stats[2].text.replace(',', ''))
+            else:
+                data['likes'] = data['comments'] = data['shares'] = None
+        except:
+            data['likes'] = data['comments'] = data['shares'] = None
 
-        stats = content.get('statsV2', {})
-        comments = stats.get('commentCount', 0)
-        likes = stats.get('diggCount', 0)
-        saved = stats.get('collectCount', 0)
-        shared = stats.get('shareCount', 0)
-        playCount = stats.get('playCount', 0)
-        repostCount = stats.get('repostCount', 0)
+        # Reposts and saves not accessible from public page currently
+        data['reposts'] = None
+        data['saves'] = None
+        data['plays'] = None  # Not publicly available
+        data['tags'] = None
+        data['creatorTags'] = None
 
-        tags_meta = soup.find("meta", attrs={'name': 'keywords'})
-        tags = [i.strip() for i in tags_meta['content'].split(",")] if tags_meta else []
-
-        creator_keywords = [i['keyword'].replace("-", " ") for i in content.get('keywordTags', [])]
-
-        return {
-            "title": title_text,
-            "description": description,
-            "soundName": audio_name,
-            "soundUrl": audio_url,
-            "comments": comments,
-            "likes": likes,
-            "saves": saved,
-            "shares": shared,
-            "plays": playCount,
-            "reposts": repostCount,
-            "creatorTags": creator_keywords,
-            "tags": tags
-        }
+        driver.quit()
+        return data
     except Exception as e:
-        print(f"Error scraping {url}: {e}")
+        print(f"Scrape error: {e}")
         return None
 
 def run_metadata_jobs():
     print("🔍 Fetching pending jobs...")
-    response = supabase.table("video_metadata_jobs").select("*").eq("status", "pending").limit(10).execute()
-    jobs = response.data
-
+    jobs = supabase.table("video_metadata_jobs").select("*").eq("status", "pending").limit(10).execute().data
     print(f"📦 Found {len(jobs)} pending jobs.")
     for job in tqdm(jobs, desc="Processing Metadata Jobs"):
-        video_id = job["id"]
         video_url = job["video_url"]
-
-        metadata = scrape_tiktok_text(video_url)
-        if metadata:
-            # Update videos table
-            supabase.table("videos").update({
-                "title": metadata["title"],
-                "description": metadata["description"],
-                "soundName": metadata["soundName"],
-                "soundUrl": metadata["soundUrl"],
-                "comments": metadata["comments"],
-                "likes": metadata["likes"],
-                "saves": metadata["saves"],
-                "shares": metadata["shares"],
-                "plays": metadata["plays"],
-                "reposts": metadata["reposts"],
-                "creatorTags": metadata["creatorTags"],
-                "tags": metadata["tags"]
-            }).eq("url", video_url).execute()
-
-            # Mark job as complete
-            supabase.table("video_metadata_jobs").update({
-                "status": "complete"
-            }).eq("id", video_id).execute()
-        else:
-            # Mark job as failed
-            supabase.table("video_metadata_jobs").update({
-                "status": "failed"
-            }).eq("id", video_id).execute()
-
-    print("✅ All jobs processed.")
+        video_id = job["id"]
+        try:
+            metadata = scrape_tiktok_text(video_url)
+            if metadata:
+                supabase.table("videos").update(metadata).eq("url", video_url).execute()
+                supabase.table("video_metadata_jobs").update({"status": "completed"}).eq("id", video_id).execute()
+            else:
+                supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", video_id).execute()
+        except Exception as e:
+            print(f"Error processing {video_url}: {e}")
+            supabase.table("video_metadata_jobs").update({"status": "failed"}).eq("id", video_id).execute()
 
 if __name__ == "__main__":
     run_metadata_jobs()
-    driver.quit()
