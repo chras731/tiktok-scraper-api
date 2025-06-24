@@ -5,4 +5,4 @@ supabase
 selenium
 beautifulsoup4
 pandas
-webdriver_manager
+webdriver-manager
