@@ -76,37 +76,46 @@ def scrape_creator_videos(handle, until_date="2024-01-01"):
         driver.quit()
     return videos
 
-async def onboard_creator(handle):
+def onboard_creator(handle):
     supabase = get_supabase_client()
     creator_id = str(uuid.uuid4())
-    await supabase.table("creators").insert({
+
+    # Insert creator
+    supabase.table("creators").insert({
         "id": creator_id,
         "handle": handle,
         "onboarded_at": datetime.utcnow().isoformat(),
         "last_checked": datetime.utcnow().isoformat()
     }).execute()
 
+    # Scrape videos
     videos = scrape_creator_videos(handle)
     for v in videos:
         v["creator_id"] = creator_id
-    await supabase.table("videos").insert(videos).execute()
+
+    # Insert videos
+    if videos:
+        supabase.table("videos").insert(videos).execute()
+
     return {"status": "onboarded", "count": len(videos)}
 
-async def refresh_creator(handle):
+def refresh_creator(handle):
     supabase = get_supabase_client()
-    result = await supabase.table("creators").select("id").eq("handle", handle).execute()
+    result = supabase.table("creators").select("id").eq("handle", handle).execute()
     if not result.data:
         return {"error": "Creator not found"}
 
     creator_id = result.data[0]["id"]
     videos = scrape_creator_videos(handle, until_date=None)
 
-    existing = await supabase.table("videos").select("url").eq("creator_id", creator_id).execute()
+    existing = supabase.table("videos").select("url").eq("creator_id", creator_id).execute()
     existing_urls = {v["url"] for v in existing.data}
 
     new_videos = [v for v in videos if v["url"] not in existing_urls]
     for v in new_videos:
         v["creator_id"] = creator_id
 
-    await supabase.table("videos").insert(new_videos).execute()
+    if new_videos:
+        supabase.table("videos").insert(new_videos).execute()
+
     return {"status": "refreshed", "count": len(new_videos)}
