@@ -1,10 +1,8 @@
-fastapi
-uvicorn
-python-dotenv
 supabase
-selenium
-beautifulsoup4
 pandas
+beautifulsoup4
+selenium
 webdriver-manager
-requests
+python-dotenv
 tqdm
+lxml
