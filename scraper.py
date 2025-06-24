@@ -38,7 +38,7 @@ async def scrape_creator_videos(handle, until_date="2024-01-01"):
                 continue
             video_id = match.group(1)
             video_date = extract_timestamp_from_id(video_id)
-            if not video_date or (until_date and video_date < until_date):
+            if not video_date or video_date < until_date:
                 break
 
             desc = await post.inner_text()
@@ -69,7 +69,9 @@ async def scrape_creator_videos(handle, until_date="2024-01-01"):
 async def onboard_creator(handle):
     supabase = get_supabase_client()
     creator_id = str(uuid.uuid4())
-    await supabase.table("creators").insert({
+
+    # DO NOT await these lines – they are synchronous
+    supabase.table("creators").insert({
         "id": creator_id,
         "handle": handle,
         "onboarded_at": datetime.utcnow().isoformat(),
@@ -79,24 +81,27 @@ async def onboard_creator(handle):
     videos = await scrape_creator_videos(handle)
     for v in videos:
         v["creator_id"] = creator_id
-    await supabase.table("videos").insert(videos).execute()
+
+    supabase.table("videos").insert(videos).execute()
+
     return {"status": "onboarded", "count": len(videos)}
 
 async def refresh_creator(handle):
     supabase = get_supabase_client()
-    result = await supabase.table("creators").select("id").eq("handle", handle).execute()
+
+    result = supabase.table("creators").select("id").eq("handle", handle).execute()
     if not result.data:
         return {"error": "Creator not found"}
 
     creator_id = result.data[0]["id"]
     videos = await scrape_creator_videos(handle, until_date=None)
 
-    existing = await supabase.table("videos").select("url").eq("creator_id", creator_id).execute()
+    existing = supabase.table("videos").select("url").eq("creator_id", creator_id).execute()
     existing_urls = {v["url"] for v in existing.data}
 
     new_videos = [v for v in videos if v["url"] not in existing_urls]
     for v in new_videos:
         v["creator_id"] = creator_id
 
-    await supabase.table("videos").insert(new_videos).execute()
+    supabase.table("videos").insert(new_videos).execute()
     return {"status": "refreshed", "count": len(new_videos)}
