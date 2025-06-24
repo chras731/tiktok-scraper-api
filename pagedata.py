@@ -15,19 +15,17 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-
 def get_pending_jobs():
     response = supabase.table("video_metadata_jobs").select("id, url").eq("status", "pending").execute()
     return response.data
 
-
 def update_video_metadata(video_url, metadata):
     supabase.table("videos").update(metadata).eq("url", video_url).execute()
 
-
 def mark_job_complete(video_url):
-    supabase.table("video_metadata_jobs").update({"status": "complete"}).eq("url", video_url).execute()
-
+    res = supabase.table("video_metadata_jobs").update({"status": "complete"}).eq("url", video_url).execute()
+    print(f"🧾 Supabase update response: {res}")
+    return res
 
 def scrape_video_metadata(video_url):
     options = Options()
@@ -84,7 +82,6 @@ def scrape_video_metadata(video_url):
                 description = desc_match.group(1) if desc_match else ""
                 tags_list = tag_matches
                 creator_keywords = creator_keywords_match.group(1) if creator_keywords_match else ""
-
                 break
 
         return {
@@ -102,36 +99,31 @@ def scrape_video_metadata(video_url):
             "tags": tags_list
         }
 
+    except Exception as e:
+        print(f"❌ Error scraping {video_url}: {e}")
+        return {"plays": 0}  # Ensure we don't mark it complete
     finally:
         driver.quit()
 
-
 def run_metadata_jobs():
     jobs = get_pending_jobs()
-    print(f"📦 Found {len(jobs)} jobs to process.")
+    print(f"📦 Found {len(jobs)} video metadata jobs")
 
     for job in jobs:
         video_url = job["url"]
         print(f"🔍 Processing: {video_url}")
+        
         metadata = scrape_video_metadata(video_url)
         print(f"✅ Scraped metadata for: {video_url}")
+        
         update_video_metadata(video_url, metadata)
         print(f"📤 Updated database for: {video_url}")
-
-
-    for job in jobs:
-        video_url = job["url"]
-        print(f"🔍 Processing: {video_url}")
-        metadata = scrape_video_metadata(video_url)
-        update_video_metadata(video_url, metadata)
-        print(f"✅ Scraped metadata for: {video_url}")
         
         if metadata.get("plays") and metadata["plays"] > 0:
             mark_job_complete(video_url)
             print(f"🏁 Marked job as complete for: {video_url}")
         else:
             print(f"⚠️ Skipped marking complete (missing play count) for: {video_url}")
-
 
 if __name__ == "__main__":
     run_metadata_jobs()
