@@ -25,7 +25,20 @@ async def scrape_creator_videos(handle, until_date="2024-01-01"):
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
         await page.goto(base_url, timeout=60000)
-        await page.wait_for_selector("div[data-e2e='user-post-item']", timeout=10000)
+
+# Try clicking accept if there's a consent popup
+        try:
+            await page.locator("button:has-text('Accept all')").click(timeout=5000)
+        except:
+            pass
+
+# Wait for posts or error state
+        try:
+            await page.wait_for_selector("div[data-e2e='user-post-item']", timeout=20000)
+        except:
+            print("No posts found or page load timed out.")
+            return []
+
 
         posts = await page.query_selector_all("div[data-e2e='user-post-item']")
         for post in posts:
