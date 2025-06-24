@@ -27,9 +27,11 @@ def update_video_metadata(video_url, metadata):
 
 def scrape_video_metadata(video_url):
     options = Options()
-    options.add_argument("--headless")
+    options.add_argument("--headless=new")  # Modern headless mode for Chrome >=109
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")  # Prevent crash from small /dev/shm
+    options.add_argument("--window-size=1920,1080")  # Optional but often improves stability
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
     try:
