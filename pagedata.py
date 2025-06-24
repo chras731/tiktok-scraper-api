@@ -108,7 +108,16 @@ def scrape_video_metadata(video_url):
 
 def run_metadata_jobs():
     jobs = get_pending_jobs()
-    print(f"📦 Found {len(jobs)} video metadata jobs")
+    print(f"📦 Found {len(jobs)} jobs to process.")
+
+    for job in jobs:
+        video_url = job["url"]
+        print(f"🔍 Processing: {video_url}")
+        metadata = scrape_video_metadata(video_url)
+        print(f"✅ Scraped metadata for: {video_url}")
+        update_video_metadata(video_url, metadata)
+        print(f"📤 Updated database for: {video_url}")
+
 
     for job in jobs:
         video_url = job["url"]
