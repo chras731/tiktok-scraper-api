@@ -44,7 +44,7 @@ def scrape_video_metadata(video_url):
         audio_name = ""
         audio_url = ""
         comments = likes = saved = shared = play_count = repost_count = 0
-        creator_keywords = [i['keyword'].replace("-", " ") for i in content['keywordTags']] if 'keywordTags' in content else []
+        creator_keywords = ""
         tags_list = []
 
         scripts = soup.find_all("script")
@@ -63,7 +63,7 @@ def scrape_video_metadata(video_url):
                 author_match = re.search(r'"nickname":"(.*?)"', json_text)
                 desc_match = re.search(r'"desc":"(.*?)"', json_text)
                 tag_matches = re.findall(r'"hashtag_name":"(.*?)"', json_text)
-                creator_keywords_match = [i['keyword'].replace("-", " ") for i in content['keywordTags']] if 'keywordTags' in content else []
+                creator_keywords_match = re.search(r'"uniqueId":"(.*?)"', json_text)
 
                 play_count = int(play_count_match.group(1)) if play_count_match else 0
                 likes = int(like_count_match.group(1)) if like_count_match else 0
@@ -81,7 +81,9 @@ def scrape_video_metadata(video_url):
                 break
 
         return {
+            "title": title,
             "description": description,
+            "soundName": audio_name,
             "soundUrl": audio_url,
             "Comments": comments,
             "likes": likes,
