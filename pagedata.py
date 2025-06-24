@@ -17,7 +17,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def get_pending_jobs():
-    response = supabase.table("video_metadata_jobs").select("id, video_url").execute()
+    response = supabase.table("video_metadata_jobs").select("id, url").execute()
     return response.data
 
 
@@ -102,7 +102,7 @@ def scrape_video_metadata(video_url):
 def run_metadata_jobs():
     jobs = get_pending_jobs()
     for job in jobs:
-        video_url = job["video_url"]
+        video_url = job["url"]
         metadata = scrape_video_metadata(video_url)
         update_video_metadata(video_url, metadata)
 
