@@ -1,5 +1,6 @@
 fastapi
 uvicorn
-selenium
+python-dotenv
 supabase
-httpx
+selenium
+beautifulsoup4
