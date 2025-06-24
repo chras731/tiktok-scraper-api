@@ -1,6 +1,13 @@
-import time
+from fastapi import FastAPI
 from pagedata import run_metadata_jobs
 
-while True:
+app = FastAPI()
+
+@app.get("/")
+def root():
+    return {"message": "TikTok Scraper API is running."}
+
+@app.post("/run")
+def run_jobs():
     run_metadata_jobs()
-    time.sleep(10)
+    return {"message": "Jobs executed."}
