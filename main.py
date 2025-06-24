@@ -1,6 +1,10 @@
 from fastapi import FastAPI, Request
 from scraper import onboard_creator, refresh_creator
 
+import os
+print("ENV SUPABASE_URL:", os.getenv("SUPABASE_URL"))
+print("ENV SUPABASE_SERVICE_KEY:", os.getenv("SUPABASE_SERVICE_KEY"))
+
 app = FastAPI()
 
 @app.get("/healthcheck")
