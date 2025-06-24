@@ -5,3 +5,4 @@ selenium
 beautifulsoup4
 pandas
 python-dotenv
+playwright
