@@ -4,3 +4,4 @@ python-dotenv
 supabase
 selenium
 beautifulsoup4
+pandas
