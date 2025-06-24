@@ -1,3 +1,4 @@
+print("🟡 [MAIN.PY] Starting cron script...")
 from pagedata import run_metadata_jobs
 
 if __name__ == "__main__":
