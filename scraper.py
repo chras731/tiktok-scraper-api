@@ -1,8 +1,6 @@
-
 import os
 import re
 import uuid
-import asyncio
 from datetime import datetime
 from supabase_client import get_supabase_client
 from playwright.async_api import async_playwright
@@ -40,7 +38,7 @@ async def scrape_creator_videos(handle, until_date="2024-01-01"):
                 continue
             video_id = match.group(1)
             video_date = extract_timestamp_from_id(video_id)
-            if not video_date or video_date < until_date:
+            if not video_date or (until_date and video_date < until_date):
                 break
 
             desc = await post.inner_text()
